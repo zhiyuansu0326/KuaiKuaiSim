@@ -1,0 +1,8 @@
+gym>=0.21,<0.27
+numba>=0.56,<0.59
+click>=8,<9
+tensorboard>=2.10,<2.16
+pystan>=2.19,<3
+absl-py>=1,<3
+mock>=4,<6
+gin-config>=0.5,<1

@@ -8,3 +8,7 @@ __pycache__/
 output/
 code/output/
 code/dataset/
+!dataset/kuairand/kuairand-Pure/data/user_features_Pure_fillna.csv
+!dataset/kuairand/kuairand-Pure/data/video_features_basic_Pure_fillna.csv
+!dataset/kuairand/kuairand-Pure/data/video_features_statistic_pure.csv
+dataset/kuairand/kuairand-Pure/data/log_session_4_08_to_5_08_Pure.csv
