@@ -11,10 +11,9 @@ log_name="user_KRMBUserResponse_lr0.0001_reg0.01_nlayer2"
 # environment args
 ENV_CLASS='KREnvironment_WholeSession_GPU'
 MAX_STEP=20
-SLATE_SIZE=20
+SLATE_SIZE=6
 EP_BS=32
 RHO=0.2
-INTRA_SLATE_METRIC=EILD
 
 # policy args
 POLICY_CLASS='OneStageHyperPolicy_with_DotScore'
@@ -72,7 +71,6 @@ do
                             --slate_size ${SLATE_SIZE}\
                             --episode_batch_size ${EP_BS}\
                             --item_correlation ${RHO}\
-                            --intra_slate_metric ${INTRA_SLATE_METRIC}\
                             --single_response\
                             --policy_action_hidden 256 64\
                             --policy_noise_var ${HA_VAR}\
