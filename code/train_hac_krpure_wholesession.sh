@@ -11,9 +11,10 @@ log_name="user_KRMBUserResponse_lr0.0001_reg0.01_nlayer2"
 # environment args
 ENV_CLASS='KREnvironment_WholeSession_GPU'
 MAX_STEP=20
-SLATE_SIZE=6
+SLATE_SIZE=20
 EP_BS=32
 RHO=0.2
+INTRA_SLATE_METRIC=EILD
 
 # policy args
 POLICY_CLASS='OneStageHyperPolicy_with_DotScore'
