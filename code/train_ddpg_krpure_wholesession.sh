@@ -79,6 +79,7 @@ do
                             --item_correlation ${RHO}\
                             --intra_slate_metric ${INTRA_SLATE_METRIC}\
                             --temper_discount ${TEMPER_DISCOUNT}\
+                            --single_response\
                             --policy_action_hidden 256 64\
                             --policy_noise_var ${HA_VAR}\
                             --policy_noise_clip ${HA_CLIP}\

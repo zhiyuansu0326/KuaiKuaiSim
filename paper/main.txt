@@ -1,0 +1,888 @@
+         MERA: Matrix-Entropy Actor-Critic for Sequential
+                          Reranking
+
+
+                                                  Anonymous Author(s)
+                                                      Affiliation
+                                                       Address
+                                                        email
+
+
+
+                                                         Abstract
+ 1             The abstract paragraph should be indented 1/2 inch (3 picas) on both the left- and
+ 2             right-hand margins. Use 10 point type, with a vertical spacing (leading) of 11 points.
+ 3             The word Abstract must be centered, bold, and in point size 12. Two line spaces
+ 4             precede the abstract. The abstract must be limited to one paragraph.
+
+
+ 5   1    Introduction
+ 6   In modern recommender systems, re-ranking is the final decision layer that determines how a small
+ 7   displayed slate is selected and arranged from a substantially larger upstream candidate pool. Unlike
+ 8   upstream retrieval or coarse ranking stages, re-ranking is not merely about assigning independent
+ 9   relevance scores to individual items. Instead, it is a constrained list-level combinatorial decision
+10   problem: the system must decide not only which items from the candidate pool should enter the
+11   final slate, but also in what order and at which positions they should be exposed. This distinction is
+12   especially critical in item recommendation scenarios, where position bias, cross-item interference,
+13   platform revenue, and user experience are all jointly mediated by the final page-level arrangement.
+14   Prior studies on list-wise recommendation have similarly emphasized that the key difficulty lies
+15   in modeling correlations within the exposed list rather than predicting each item independently.
+16   In particular, KuaiSim explicitly identifies request-level recommendation as a list-wise problem,
+17   where each action corresponds to an ordered list presented to the user, and conventional point-wise
+18   evaluation is insufficient for capturing cross-item patterns and list-level effects [6].
+19   However, in real-world systems, item re-ranking is not a one-shot static ranking problem. The way
+20   exposure is allocated at the current step influences not only immediate responses such as clicks, likes,
+21   or conversions, but also the user’s future interest state, session depth, return probability, and long-term
+22   engagement. Therefore, item re-ranking is more accurately viewed as a sequential decision-making
+23   problem rather than a single-step list optimization problem. This perspective is consistent with recent
+24   research on long-term recommendation. KuaiSim distinguishes three levels of recommendation tasks:
+25   request-level list-wise recommendation, whole-session sequential recommendation, and cross-session
+26   retention optimization, thereby emphasizing that each recommendation reshapes later requests and
+27   later user feedback [6]. Likewise, DT4IER argues that optimizing only immediate feedback such as
+28   CTR is often insufficient, since such short-term signals may fail to reflect long-term user satisfaction
+29   and retention, and practical systems must jointly consider immediate engagement and long-term
+30   return behavior [3]. AURO further shows that user retention optimization naturally leads to a dynamic
+31   recommendation environment in which user behavior patterns evolve over time, making long-term
+32   recommendation a non-stationary sequential control problem [5].
+33   Although reinforcement learning has been widely adopted for long-term optimization in recommender
+34   systems, most existing methods still do not explicitly rewrite the geometry of the ranking action itself.
+35   A common design is to let the policy output a continuous control vector or latent action, and then rely
+36   on a pretrained scoring model or a predefined ranking function to produce the final recommendation
+
+     Submitted to 40th Conference on Neural Information Processing Systems (NeurIPS 2026). Do not distribute.
+37   list. For example, AURO models the recommendation environment as a hidden-parameter MDP
+38   and uses a continuous action space together with a scoring model and ranking function to optimize
+39   user retention under non-stationary dynamics [5]. These approaches are effective for long-term
+40   reward optimization, yet the ranking decision remains an indirect consequence of a downstream
+41   ranking module, rather than a native structured action. As a result, the item–position assignment that
+42   fundamentally defines re-ranking is not treated as the primary decision object.
+43   On the other hand, research on structured action learning has shown that permutation matrices provide
+44   a natural representation for combinatorial decisions involving matching, ranking, and ordering. In
+45   particular, Sinkhorn Policy Gradient (SPG) demonstrates that actor–critic learning can be extended
+46   to permutation-valued actions by introducing a Sinkhorn layer that outputs a continuous relaxation
+47   of permutation matrices [1]. Relatedly, Gumbel-Sinkhorn networks show that a score matrix can
+48   be perturbed by Gumbel noise, relaxed by Sinkhorn scaling, and rounded to a discrete matching
+49   with the Hungarian algorithm, yielding a reparameterized sampling view for latent permutations [4].
+50   Importantly, however, SPG is formulated in an average-reward contextual bandit setting, and the paper
+51   explicitly notes that its derivation can be viewed as a one-step reinforcement learning formulation
+52   obtained by setting the episode horizon to one; extending the method to episodic RL is left as
+53   future work [1]. In other words, existing structured-action methods clarify how permutation-valued
+54   decisions can be relaxed and sampled, but they do not address the defining challenge of sequential
+55   re-ranking: the ranking action is not merely a permutation output for a static instance, but a control
+56   variable that shapes future user states through exposure.
+57   This leaves a clear gap in the literature. Existing long-term recommendation methods model sequential
+58   optimization but usually do not represent ranking actions in an assignment-native way. Existing
+59   permutation-based actor–critic methods show that structured combinatorial actions are learnable, but
+60   remain in contextual bandit or one-step settings rather than sequential re-ranking environments with
+61   evolving user preferences. Consequently, an important question remains unresolved: when a ranking
+62   action should itself be treated as a structured display-or-discard decision, and when that decision
+63   continuously affects the future user-interest distribution, how should we optimize it under a unified
+64   reinforcement learning framework?
+65   In this work, we argue that the action in item re-ranking should not be viewed as a set of independent
+66   item scores, nor merely as an auxiliary input to a downstream ranking function. Instead, it should
+67   be modeled directly as an item–position allocation plan on the final reranking shortlist. Because the
+68   shortlist size K is larger than the number of exposed positions N , the action must simultaneously
+69   decide which N items are displayed and which K − N items are discarded. Following the transport-
+70   plan notation common in differentiable top-k formulations, we represent each re-ranking action as a
+71   rectangular partial-assignment matrix whose rows index shortlisted items and whose columns index
+72   the N display positions plus one dump slot. The policy therefore outputs a score matrix whose
+73   Sinkhorn relaxation defines a soft transport plan, while the environment-facing discrete action is
+74   sampled by Gumbel perturbation followed by Sinkhorn relaxation and Hungarian rounding. This
+75   representation preserves the combinatorial structure of reranking while bringing display competition,
+76   position effects, and discard decisions into the action space itself rather than leaving them to post-
+77   processing.
+78   Building on this action formulation, we further cast sequential re-ranking as an actor–critic problem
+79   over rectangular transport-style ranking actions. Moreover, motivated by the geometric structure
+80   induced by Sinkhorn scaling with prescribed marginals, we introduce a maximum matrix-entropy
+81   regularization principle to stabilize exploration and optimization in this structured action space.
+82   The resulting framework unifies three ingredients that have previously remained largely separate:
+83   assignment-native action modeling for ranking, long-term user optimization with evolving request
+84   histories, and entropy-regularized control tailored to partial-assignment matrices. Rather than merely
+85   reusing Sinkhorn within reinforcement learning, our formulation reinterprets re-ranking itself as a
+86   structured control problem on a ranking transport polytope.
+87   Our main contributions are summarized as follows:
+
+
+88   2   Problem Formulation
+
+89   We consider session-wise item reranking as a sequential interaction between the agent and users, and
+90   emphasize the list-wise, multi-behavior, and session-level nature of this interaction, as illustrated in
+
+
+                                                        2
+                  Interaction Step (!-th)               (%       ($               (&#$   (&            Maximize
+
+          User Request !!              Action &!        '%       '$         ...   '&#$   '&                &
+
+                            Agent                                                                      )' * (!
+           {", ℋ:!#$ , %}             (Reranking)
+                                                                                                          ()%
+
+
+
+                     Figure 1: An overview: session-wise item reranking as a sequential interaction.
+
+91    Figure 1. A user session refers to the continuous interactions from the moment the user opens the
+92    app until leaving it, and we use T to denote the terminal interaction step of that session. At the t-th
+93    interaction step in a session, the agent receives a user request Ot as input and outputs a structured
+94    reranking action Xt ∈ XK,N , which means selecting an ordered list of N items from a candidate
+95    item pool of size K. Following the standard notation in recommendation, each request Ot consists of
+96    static user profile features U, the most recent interaction history H:t−1 that evolves over time, and
+97    an upstream candidate item pool Ct . Here K := |Ct | is the candidate-pool size and N is the number
+98    of exposed positions in the final slate. The formal definition of XK,N is given later in Section 3.1,
+99    Eq. (2).
+100   After receiving Xt , the user provides a feedback signal Yt , which may contain multiple behavior
+101   channels and delayed outcomes, such as click, like, add-to-favorite, download, conversion, dwell,
+102   leave, or return signals. We map the multi-channel feedback to a scalar reward by rt = r(Yt ) and
+103   seek a policy π(·|Ot ) that maximizes long-term utility:
+                                                            " T     #
+                                                               X
+                                          max J(π) := Eπ         rt .                                (1)
+                                                    π
+                                                                      t=0
+
+
+
+104   3      Matrix Entropy Reranking Actor-Critic
+105   Our method, Matrix Entropy Reranking Actor-Critic (MERA), is organized from structured action
+106   geometry to learning. We first represent reranking as constrained transport-style partial assignment,
+107   then introduce a compact actor–critic interface, and finally derive a practical hard-action training
+108   procedure.
+
+109   3.1      Structured Action Modeling
+
+110   MERA represents the final-stage reranking action as an item-position allocation on a shortlist of
+111   K items. Each item is assigned either to one of the N exposed positions or to a dump slot. Let
+112   µ := 1K ∈ RK and ν := [1⊤              ⊤
+                                    N, K − N] ∈ R
+                                                    N +1
+                                                         . The corresponding hard partial-assignment set
+113   and its transport relaxation are
+                                   n                                                o
+                         XK,N := X ∈ {0, 1}K×(N +1) : X1N +1 = µ, X ⊤ 1K = ν ,
+                                   n                                          o                      (2)
+                                          K×(N +1)
+                          TK,N := P ∈ R+           : P 1N +1 = µ, P ⊤ 1K = ν .
+114   Any X ∈ XK,N is a discrete reranking action, any P ∈ TK,N is a soft exposure-allocation plan. The
+115   displayed list is read from the first N columns of the resulting assignment.
+
+116   3.2      Actor and Critic Interfaces
+
+117   The actor defines a parameterized policy πϕ (· | Ot ): given request Ot , it outputs a soft matrix
+118   Pϕ (Ot ) ∈ TK,N as an action-distribution representation, and a sampler S draws a hard action by
+119   Xt = S(Pϕ (Ot )) ∈ XK,N .
+120   The critic evaluates how good a realized action is for the current request. It takes (Ot , Xt ) as input
+121   and outputs Qθ (Ot , Xt ), which is trained to match the regularized expected return. Detailed network
+122   parameterization is deferred to Appendix A.1.
+
+123   3.3      Maximum Matrix-Entropy Reinforcement Learning
+
+124   Standard reinforcement learning maximizes expected discounted reward. SAC tells the same story,
+125   but adds a preference for policies with larger causal entropy H(π(· | Ot )) [2]. In reranking, however,
+
+
+                                                             3
+                                                                                  K!
+126   the hard action space is the ordered top-N space XK,N with size |XK,N | = (K−N )! , so computing
+                                                    
+                                                K!
+127   policy entropy exactly already costs O (K−N )! .
+128   MERA keeps the maximum-entropy viewpoint but replaces policy entropy with a tractable upper
+129   bound. For a hard-action policy π, let Pπ (Ot ) = E[Xt | Ot ] ∈ TK,N be the mean transport plan
+                             PK PN +1
+130   and let Hmat (P ) := − i=1 j=1 Pij log Pij . Since a ranking action can be viewed as the joint
+131   assignment of items to slots, Shannon entropy subadditivity gives H(π(· | Ot )) ≤ Hmat (Pπ (Ot )).
+132   We therefore optimize
+                                    " T                           #
+                                      X                        
+                                          t
+                      Jτ (ϕ) = Eπϕ       γ r(Yt ) + τ Hmat (Pt ) ,       Pt = Pϕ (Ot ).            (3)
+                                        t=0
+
+133   This yields a matrix-entropy policy-evaluation operator Tτϕ and the improvement operator
+                                                   "                                              #
+                                                                                               
+                                                                                ′             ′
+       (Tτ Q)(Ot , Pt ) = E(Ot+1 ,Yt )∼p(·|Ot ,Pt ) r(Yt ) + γ sup   Q(Ot+1 , P ) + τ Hmat (P ) . (4)
+                                                              P ′ ∈TK,N
+
+134   Proposition 1 (Policy evaluation contraction). For any fixed actor plan Pϕ , the operator Tτϕ is a
+135   γ-contraction under the sup norm and therefore admits a unique fixed point Qϕτ .
+136   Proposition 2 (Soft optimality contraction). The operator Tτ is also a γ-contraction under the sup
+137   norm and therefore admits a unique fixed point Q⋆τ .
+138   These operators are the matrix-entropy analogue of SAC soft policy iteration; unlike SAC, the
+139   improvement step is a constrained optimization over transport plans rather than a KL projection onto
+140   a policy density. The omitted derivations are deferred to Appendix A.
+
+141   3.4   Decoupled Optimization
+
+142   In practice, the inner maximization in Eq. (4) is still too expensive to solve at every update, so
+143   we approximate the next-step regularized value with the target actor. Let P̄t+1 := Pϕ̄ (Ot+1 ) and
+144   X̄t+1 ∼ πϕ̄ (· | Ot+1 ). We then use the target
+                                                                                    
+                               q̂t = r(Yt ) + γ Qθ̄ (Ot+1 , X̄t+1 ) + τ Hmat (P̄t+1 ) ,
+145   which keeps the same reward-plus-next-soft-value structure as Eq. (4). The first term evaluates the
+146   next hard action under the target critic, while the second retains the matrix-entropy bonus of the next
+147   feasible plan; target networks (θ̄, ϕ̄) stabilize this bootstrap and avoid solving the inner maximization
+148   over TK,N explicitly. The critic therefore minimizes
+                                                       h                   2 i
+                                         LQ (θ) = E Qθ (Ot , Xt ) − q̂t .                                    (5)
+
+149   Once Qθ approximates this regularized return, the actor is updated by maximizing hard-action value
+150   under the feasible marginal-plan constraint,
+                                       h                              i
+                max EO∼D, X∼πϕ (·|O) Qθ (O, X) + τ Hmat (Pϕ (O)) s.t. Pϕ (O) ∈ TK,N ,                (6)
+                  ϕ
+
+151   where Pϕ (O)1N +1 = µ and Pϕ (O)⊤ 1K = ν impose the partial doubly-stochastic marginal con-
+152   straints. To optimize Eq. (6) rigorously, we decouple its differentiable surrogate into two linked
+153   problems: an inner entropic transport layer over feasible plans, and an outer alignment problem
+154   between the actor logits and the critic-induced gradient field.
+155   Theorem 1 (KKT-Equivalent Decoupling). Let Gθ (O, ε) denote the critic gradient obtained through
+156   the straight-through sampler, and let Π remove row and column shift directions of the logits. Then
+157   solving the differentiable surrogate of Eq. (6) is first-order equivalent to solving the inner problem
+                                                     n                                 o
+                            Pϕ⋆ (O, ε) = arg max ⟨Zϕ (O) + ε, P ⟩ + τ Hmat (P ) ,                          (7)
+                                              P ∈TK,N
+
+158   and the outer alignment condition
+                                                               
+                                        Π Zϕ (O) + ε − Gθ (O, ε) = 0.                                       (8)
+
+
+                                                          4
+159   The inner problem in Eq. (7) is solved exactly by generalized Sinkhorn scaling.
+160   Proposition 3 (Sinkhorn Layer). The unique solution of Eq. (7) is
+                                 Pϕ⋆ (O, ε) = Sinkhornµ,ν ((Zϕ (O) + ε)/τ ) .                                (9)
+161   Here Sinkhornµ,ν denotes the unique matrix in TK,N obtained by scaling exp((Zϕ (O) + ε)/τ ) to
+162   row marginals µ and column marginals ν.
+163   The outer problem then becomes a logit-alignment objective, which we optimize through
+                                                                                    2
+                              1
+                     LZ (ϕ) = EO∼D, ε∼Gumbel Π Zϕ (O) + ε − sg[Gθ (O, ε)]                   ,           (10)
+                              2                                                         F
+
+164   where D denotes the empirical request marginal of the replay buffer and sg[·] denotes stop-gradient.
+165   The proofs of the KKT-equivalent decoupling, the Sinkhorn layer, and the final actor loss are deferred
+166   to Appendix A.5, Appendix A.4, and Appendix A.6, respectively.
+
+167   References
+168   [1] Patrick Emami and Sanjay Ranka. Learning permutations with sinkhorn policy gradient. arXiv
+169       preprint arXiv:1805.07010, 2018.
+170   [2] Tuomas Haarnoja, Aurick Zhou, Pieter Abbeel, and Sergey Levine. Soft actor-critic: Off-policy
+171       maximum entropy deep reinforcement learning with a stochastic actor. Proceedings of the 35th
+172       International Conference on Machine Learning, 80:1861–1870, 2018.
+173   [3] Ziru Liu, Shuchang Liu, Zijian Zhang, Qingpeng Cai, Xiangyu Zhao, Kesen Zhao, Lantao Hu,
+174       Peng Jiang, and Kun Gai. Sequential recommendation for optimizing both immediate feedback
+175       and long-term retention. In Proceedings of the 47th International ACM SIGIR Conference on
+176       Research and Development in Information Retrieval, 2024.
+177   [4] Gonzalo Mena, David Belanger, Scott Linderman, and Jasper Snoek. Learning latent permutations
+178       with gumbel-sinkhorn networks. In International Conference on Learning Representations, 2018.
+179   [5] Zhenghai Xue, Qingpeng Cai, Bin Yang, Lantao Hu, Peng Jiang, Kun Gai, and Bo An. Auro:
+180       Reinforcement learning for adaptive user retention optimization in recommender systems. In
+181       Proceedings of the ACM Web Conference 2025, 2025.
+182   [6] Kesen Zhao, Shuchang Liu, Qingpeng Cai, Xiangyu Zhao, Ziru Liu, Dong Zheng, Peng Jiang,
+183       and Kun Gai. Kuaisim: A comprehensive simulator for recommender systems. In Advances in
+184       Neural Information Processing Systems, 2023.
+
+
+185   A     Appendix: Derivations for MERA
+186   This appendix provides the derivations omitted from the main text. We keep the main body focused
+187   on definitions and final statements, while placing the intermediate steps and proofs here.
+
+188   A.1   Detailed Network Parameterization
+
+189   This subsection gives the explicit matrix-form parameterization used in Section 3.2. At step t, the
+190   request encoder is
+                                      st = fs (Ot ) ∈ Rds ,
+                                                                            ⊤
+                                     Ct = fc (Ct ) = c⊤                 ⊤
+                                                                               ∈ RK×de ,
+                                                       
+                                                         t,1 , . . . , ct,K                          (11)
+                                                                ⊤
+                                      E = e1 , . . . , e⊤
+                                            ⊤
+                                                                    ∈ R(N +1)×de .
+                                                              
+                                                        N +1
+191   Here slots 1, . . . , N are exposed positions and slot N + 1 is the dump slot.
+                              (s)                                          (e)
+                            gt      = σ(Ws st + bs ) ∈ Rde ,             gt      = σ(We st + be ) ∈ Rde ,
+                                               (s)                                      (e)
+                             ĥt,i = ct,i ⊙ gt , i ∈ [K],               êt,j = ej ⊙ gt , j ∈ [N + 1],
+                                                            ⊤                                              (12)
+                              Ĥt = ĥ⊤                 ⊤              e t = Transformerset
+                                     
+                                        t,1 , . . . , ĥt,K    ,       H                ϕ (Ĥt ),
+
+                     [Zϕ (st )]ij = ⟨e
+                                     ht,i , êt,j ⟩,      Zϕ (st ) ∈ RK×(N +1) .
+
+                                                                   5
+192
+                                  Rt = (Xt⊤ Ct )1:N,: ,
+                                                                                                                           (13)
+                        Qθ (st , Xt ) = MLPθ [ st ; MeanPool Transformerord
+                                                                        θ   (R t )  ] .
+
+193   A.2   Proof of Proposition 1
+
+194   For a fixed actor plan Pϕ , the regularized evaluation operator is
+                                                h                                          i
+           (Tτϕ Q)(O, P ) = E(O′ ,Y)∼p(·|O,P ) r(Y) + γ Q O′ , Pϕ (O′ ) + τ Hmat (Pϕ (O′ )) .
+                                                                         
+                                                                                                                              (14)
+
+195   For any (O, P ), let ∆(O, P ) := (Tτϕ Q1 )(O, P ) − (Tτϕ Q2 )(O, P ). Then the contraction proof can
+196   be written as one displayed derivation:
+         ∥Tτϕ Q1 − Tτϕ Q2 ∥∞ = sup |∆(O, P )|
+                                    (O,P )
+
+                                 = sup (Tτϕ Q1 )(O, P ) − (Tτϕ Q2 )(O, P )
+                                    (O,P )
+                                                 h                                    i
+                                 = γ sup E(O′ ,Y) Q1 O′ , Pϕ (O′ ) − Q2 O′ , Pϕ (O′ )
+                                                                  
+                                      (O,P )                                                                                  (15)
+                                    (by Eq. (14), since the reward and future entropy terms cancel)
+                                                  h                                     i
+                                 ≤ γ sup E(O′ ,Y) Q1 O′ , Pϕ (O′ ) − Q2 O′ , Pϕ (O′ )
+                                                                    
+                                      (O,P )
+
+                                 ≤ γ∥Q1 − Q2 ∥∞ .
+197   Hence Tτϕ is a γ-contraction and admits a unique fixed point by Banach’s fixed-point theorem.
+
+198   A.3   Proof of Proposition 2
+
+199   The regularized optimality operator is
+                                                        "                                                             #
+                                                                                                                    
+                                                                                      ′    ′                     ′
+               (Tτ Q)(s, P ) = E(s′ ,Y)∼p(·|s,P ) r(Y) + γ            sup          Q(s , P ) + τ Hmat (P )                .   (16)
+                                                                   P ′ ∈TK,N
+
+200   For any (s, P ), let ∆⋆ (s, P ) := (Tτ Q1 )(s, P ) − (Tτ Q2 )(s, P ) and
+                                                                             
+                         Ψi (s′ ) := sup        Qi (s′ , P ′ ) + τ Hmat (P ′ ) ,               i ∈ {1, 2}.
+                                     P ′ ∈TK,N
+
+201   Then the optimality contraction is obtained from the single multi-line derivation
+                   ∥Tτ Q1 − Tτ Q2 ∥∞ = sup |∆⋆ (s, P )|
+                                               (s,P )
+
+                                         = γ sup E(s′ ,Y) Ψ1 (s′ ) − Ψ2 (s′ )
+                                                                            
+                                                 (s,P )
+
+                                                 (by Eq. (16))                                                                (17)
+                                                              "                                                      #
+                                         ≤ γ sup E(s′ ,Y)           sup        Q1 (s′ , P ′ ) − Q2 (s′ , P ′ )
+                                                 (s,P )           P ′ ∈TK,N
+
+                                         ≤ γ∥Q1 − Q2 ∥∞ .
+202   where the inequality uses the standard bound | sup f −sup g| ≤ sup |f −g| with f (P ′ ) = Q1 (s′ , P ′ )+
+203   τ Hmat (P ′ ) and g(P ′ ) = Q2 (s′ , P ′ ) + τ Hmat (P ′ ). so Tτ is also a γ-contraction and admits a unique
+204   fixed point.
+
+205   A.4   Derivation of Proposition 3
+
+206   The inner entropic transport problem used in Proposition 3 is
+                                                  n                           o
+                           Pϕ⋆ (O, ε) = arg max ⟨Zϕ (O) + ε, P ⟩ + τ Hmat (P ) .                                              (18)
+                                                 P ∈TK,N
+
+
+                                                             6
+207   To keep the derivation compact, write B := Zϕ (O) + ε. Let L(P, ξ, ζ) denote the Lagrangian of
+208   Eq. (18) with row and column multipliers ξ and ζ for the transport constraints with source marginal
+209   µ and target marginal ν. The first-order condition yields the multi-line derivation
+                              ∂L
+                        0=         = Bij − τ (1 + log Pij ) + ξi + ζj
+                             ∂Pij
+                                            Bij + ξi + ζj
+                           ⇐⇒ log Pij =                    −1
+                                                  τ
+                                             
+                                               Bij + ξi + ζj
+                                                                                                    (19)
+                           ⇐⇒ Pij = exp                       − 1 = ui exp(Bij /τ )vj
+                                                     τ
+                           ⇐⇒ P = Diag(u) exp(B/τ ) Diag(v)
+                           ⇐⇒ Pϕ⋆ = Sinkhornµ,ν (B/τ ),
+210   where the constant exp(−1) is absorbed into the row and column scalings, and the last line is exactly
+211   the definition of generalized Sinkhorn scaling over exp(B/τ ) with row marginals µ and column
+212   marginals ν.
+
+213   A.5   Derivation of Theorem 1
+
+214   The straight-through regularized objective used in the main text is
+                                                               
+               Jθst (O, ε, P ) = Qθ O, sg Mµ,ν (P ) − P + P + τ Hmat (P ),
+                                                          
+                                                                                      P ∈ TK,N .      (20)
+215   The corresponding projector is
+                                                                         1
+                             Π(M ) = HK M HN +1 ,          Hm := Im −      1m 1⊤
+                                                                               m.                     (21)
+                                                                         m
+216   Equivalently,
+                            1                      1               1
+            Π(M ) = M −          M 1N +1 1⊤
+                                          N +1 −     1K 1⊤ KM +          1K 1⊤          ⊤
+                                                                             K M 1N +1 1N +1 ,
+                          N +1                    K             K(N + 1)
+217   which removes all row-shift and column-shift directions.
+218   Fix a request O, a noise sample ε, and assume P ∈ int(TK,N ). Let
+                                     X st (P ) := sg Mµ,ν (P ) − P + P.
+                                                                  
+
+219   Because stop-gradient freezes Mµ,ν (P ) − P in the backward pass, the derivative of the straight-
+220   through critic term in Eq. (20) with respect to P is exactly the gradient of Qθ with respect to its
+221   matrix input, evaluated at X st (P ). Write
+                                   Gθ (O, ε; P ) := ∇A Qθ (O, A)|A=X st (P ) .
+222   Then the KKT stationarity condition of Eq. (20) can be compressed into the projected form
+       0 = Gθ (O, ε; P ) − τ log P + 1K 1⊤            ⊤          ⊤
+                                               
+                                           N +1 + ξ1N +1 + 1K ζ         (KKT stationarity in P -space)
+                                      
+         =⇒ Π Gθ (O, ε; P ) − τ log P = 0
+             (because Π(ξ1⊤              ⊤          ⊤
+                          N +1 ) = Π(1K ζ ) = Π(1K 1N +1 ) = 0).
+                                                                                                  (22)
+223   If moreover P = Sinkhornµ,ν ((Z + ε)/τ ), then there exist row and column shift vectors α and β
+224   such that the generalized Sinkhorn scaling identity gives
+                        log P = (Z + ε)/τ + α1⊤ N +1 + 1K β
+                                                            ⊤
+
+                              =⇒ Π(τ log P ) = Π(Z + ε)                                               (23)
+                                 (the row and column shifts are again removed by Π).
+225   Substituting this relation into Eq. (22) yields
+                                                                         
+                    Π Gθ (O, ε; P ) − τ log P = 0 ⇐⇒ Π Z + ε − Gθ (O, ε; P ) = 0.                     (24)
+
+226   Finally, setting P = Peϕ (O, ε) = Sinkhornµ,ν ((Zϕ (O) + ε)/τ ) gives the statement in Theorem 1,
+227   since Gθ (O, ε; P ) then reduces to the main-text quantity Gθ (O, ε).
+
+
+                                                       7
+228   A.6   Why the MERA Actor Loss is a KKT Residual Minimization
+
+229   Let                                  h                              i
+                          Peref (O, ε) = sg Sinkhornµ,ν ((Zϕ (O) + ε)/τ ) ,
+                                                         
+                          Xref (O, ε) = Mµ,ν Peref (O, ε) ,
+                                                                     
+                            st
+                          Xref  (O, ε) = sg Xref (O, ε) − Peref (O, ε) + Peref (O, ε),
+                                           h                            i
+                            Gθ (O, ε) = sg ∇A Qθ (O, A)|A=X st (O,ε) .
+                                                                 ref
+
+230   Then the zero-residual condition of the actor loss in Eq. (10) can be written as
+                                                                          
+                  LZ (ϕ; O, ε) = 0 ⇐⇒ Π Zϕ (O) + ε − sg[Gθ (O, ε)] = 0
+                                                                       
+                                     ⇐⇒ Π Zϕ (O) + ε − Gθ (O, ε) = 0                                    (25)
+                                      ⇐⇒ Peϕ (O, ε) = Sinkhornµ,ν ((Zϕ (O) + ε)/τ )
+                                        and the first-order KKT condition of Eq. (20) holds.
+231   where the second equivalence uses the fact that stop-gradient changes only the backward graph, not
+232   the forward value. Importantly, this statement concerns stationarity of the straight-through objective,
+233   not necessarily local maximality. Local optimality further requires second-order sufficient conditions,
+234   or global concavity of Jθst (O, ε, P ) over TK,N .
+
+235   Gradient of the actor loss. Because the teacher branch is detached, the chain rule collapses to the
+236   logit branch only:
+                          ⊤
+                       ∂Zϕ     ∂LZ                                st
+           ∇ ϕ LZ =                    (because ∂ Peref /∂ϕ = ∂Xref  /∂ϕ = ∂Gθ /∂ϕ = 0)
+                        ∂ϕ     ∂Zϕ
+                                   "                    ⊤                                  #      (26)
+                                       ∂Π(Zϕ (O) + ε)                                       
+                  = EO∼D, ε∼Gumbel                          Π Zϕ (O) + ε − sg[Gθ (O, ε)] ,
+                                              ∂ϕ
+
+237   where the detached branches remove all gradients through Hungarian rounding, target matching,
+238   and the teacher critic path. Equation (26) therefore shows that MERA updates the actor through the
+239   straight-through estimator: the critic is evaluated on hard sampled actions, while the backward pass
+240   follows the relaxed Gumbel-Sinkhorn path.
+
+
+
+
+                                                        8
+241   NeurIPS Paper Checklist
+242   The checklist is designed to encourage best practices for responsible machine learning research,
+243   addressing issues of reproducibility, transparency, research ethics, and societal impact. Do not remove
+244   the checklist: The papers not including the checklist will be desk rejected. The checklist should
+245   follow the references and follow the (optional) supplemental material. The checklist does NOT count
+246   towards the page limit.
+247   Please read the checklist guidelines carefully for information on how to answer these questions. For
+248   each question in the checklist:
+
+249          • You should answer [Yes], [No], or [N/A].
+250          • [N/A] means either that the question is Not Applicable for that particular paper or the
+251            relevant information is Not Available.
+252          • Please provide a short (1–2 sentence) justification right after your answer (even for [N/A]).
+
+253   The checklist answers are an integral part of your paper submission. They are visible to the
+254   reviewers, area chairs, senior area chairs, and ethics reviewers. You will also be asked to include it
+255   (after eventual revisions) with the final version of your paper, and its final version will be published
+256   with the paper.
+257   The reviewers of your paper will be asked to use the checklist as one of the factors in their evaluation.
+258   While [Yes] is generally preferable to [No], it is perfectly acceptable to answer [No] provided a
+259   proper justification is given (e.g., error bars are not reported because it would be too computationally
+260   expensive” or “we were unable to find the license for the dataset we used”). In general, answering
+261   [No] or [N/A] is not grounds for rejection. While the questions are phrased in a binary way, we
+262   acknowledge that the true answer is often more nuanced, so please just use your best judgment and
+263   write a justification to elaborate. All supporting evidence can appear either in the main paper or the
+264   supplemental material, provided in appendix. If you answer [Yes] to a question, in the justification
+265   please point to the section(s) where related material for the question can be found.
+266   IMPORTANT, please:
+
+267          • Delete this instruction block, but keep the section heading “NeurIPS Paper Checklist",
+268          • Keep the checklist subsection headings, questions/answers and guidelines below.
+269          • Do not modify the questions and only use the provided macros for your answers.
+
+270         1. Claims
+271            Question: Do the main claims made in the abstract and introduction accurately reflect the
+272            paper’s contributions and scope?
+273            Answer: [TODO]
+274            Justification: [TODO]
+275            Guidelines:
+276               • The answer [N/A] means that the abstract and introduction do not include the claims
+277                  made in the paper.
+278               • The abstract and/or introduction should clearly state the claims made, including the
+279                  contributions made in the paper and important assumptions and limitations. A [No] or
+280                  [N/A] answer to this question will not be perceived well by the reviewers.
+281               • The claims made should match theoretical and experimental results, and reflect how
+282                  much the results can be expected to generalize to other settings.
+283               • It is fine to include aspirational goals as motivation as long as it is clear that these goals
+284                  are not attained by the paper.
+285         2. Limitations
+286            Question: Does the paper discuss the limitations of the work performed by the authors?
+287            Answer: [TODO]
+288            Justification: [TODO]
+
+
+                                                           9
+289     Guidelines:
+290        • The answer [N/A] means that the paper has no limitation while the answer [No] means
+291          that the paper has limitations, but those are not discussed in the paper.
+292        • The authors are encouraged to create a separate “Limitations” section in their paper.
+293        • The paper should point out any strong assumptions and how robust the results are to
+294          violations of these assumptions (e.g., independence assumptions, noiseless settings,
+295          model well-specification, asymptotic approximations only holding locally). The authors
+296          should reflect on how these assumptions might be violated in practice and what the
+297          implications would be.
+298        • The authors should reflect on the scope of the claims made, e.g., if the approach was
+299          only tested on a few datasets or with a few runs. In general, empirical results often
+300          depend on implicit assumptions, which should be articulated.
+301        • The authors should reflect on the factors that influence the performance of the approach.
+302          For example, a facial recognition algorithm may perform poorly when image resolution
+303          is low or images are taken in low lighting. Or a speech-to-text system might not be
+304          used reliably to provide closed captions for online lectures because it fails to handle
+305          technical jargon.
+306        • The authors should discuss the computational efficiency of the proposed algorithms
+307          and how they scale with dataset size.
+308        • If applicable, the authors should discuss possible limitations of their approach to
+309          address problems of privacy and fairness.
+310        • While the authors might fear that complete honesty about limitations might be used by
+311          reviewers as grounds for rejection, a worse outcome might be that reviewers discover
+312          limitations that aren’t acknowledged in the paper. The authors should use their best
+313          judgment and recognize that individual actions in favor of transparency play an impor-
+314          tant role in developing norms that preserve the integrity of the community. Reviewers
+315          will be specifically instructed to not penalize honesty concerning limitations.
+316   3. Theory assumptions and proofs
+317     Question: For each theoretical result, does the paper provide the full set of assumptions and
+318     a complete (and correct) proof?
+319     Answer: [TODO]
+320     Justification: [TODO]
+321     Guidelines:
+322        • The answer [N/A] means that the paper does not include theoretical results.
+323        • All the theorems, formulas, and proofs in the paper should be numbered and cross-
+324          referenced.
+325        • All assumptions should be clearly stated or referenced in the statement of any theorems.
+326        • The proofs can either appear in the main paper or the supplemental material, but if
+327          they appear in the supplemental material, the authors are encouraged to provide a short
+328          proof sketch to provide intuition.
+329        • Inversely, any informal proof provided in the core of the paper should be complemented
+330          by formal proofs provided in appendix or supplemental material.
+331        • Theorems and Lemmas that the proof relies upon should be properly referenced.
+332   4. Experimental result reproducibility
+333     Question: Does the paper fully disclose all the information needed to reproduce the main ex-
+334     perimental results of the paper to the extent that it affects the main claims and/or conclusions
+335     of the paper (regardless of whether the code and data are provided or not)?
+336     Answer: [TODO]
+337     Justification: [TODO]
+338     Guidelines:
+339        • The answer [N/A] means that the paper does not include experiments.
+
+
+                                                 10
+340        • If the paper includes experiments, a [No] answer to this question will not be perceived
+341          well by the reviewers: Making the paper reproducible is important, regardless of
+342          whether the code and data are provided or not.
+343        • If the contribution is a dataset and/or model, the authors should describe the steps taken
+344          to make their results reproducible or verifiable.
+345        • Depending on the contribution, reproducibility can be accomplished in various ways.
+346          For example, if the contribution is a novel architecture, describing the architecture fully
+347          might suffice, or if the contribution is a specific model and empirical evaluation, it may
+348          be necessary to either make it possible for others to replicate the model with the same
+349          dataset, or provide access to the model. In general. releasing code and data is often
+350          one good way to accomplish this, but reproducibility can also be provided via detailed
+351          instructions for how to replicate the results, access to a hosted model (e.g., in the case
+352          of a large language model), releasing of a model checkpoint, or other means that are
+353          appropriate to the research performed.
+354        • While NeurIPS does not require releasing code, the conference does require all submis-
+355          sions to provide some reasonable avenue for reproducibility, which may depend on the
+356          nature of the contribution. For example
+357          (a) If the contribution is primarily a new algorithm, the paper should make it clear how
+358               to reproduce that algorithm.
+359          (b) If the contribution is primarily a new model architecture, the paper should describe
+360               the architecture clearly and fully.
+361          (c) If the contribution is a new model (e.g., a large language model), then there should
+362               either be a way to access this model for reproducing the results or a way to reproduce
+363               the model (e.g., with an open-source dataset or instructions for how to construct
+364               the dataset).
+365          (d) We recognize that reproducibility may be tricky in some cases, in which case
+366               authors are welcome to describe the particular way they provide for reproducibility.
+367               In the case of closed-source models, it may be that access to the model is limited in
+368               some way (e.g., to registered users), but it should be possible for other researchers
+369               to have some path to reproducing or verifying the results.
+370   5. Open access to data and code
+371     Question: Does the paper provide open access to the data and code, with sufficient instruc-
+372     tions to faithfully reproduce the main experimental results, as described in supplemental
+373     material?
+374     Answer: [TODO]
+375     Justification: [TODO]
+376     Guidelines:
+377        • The answer [N/A] means that paper does not include experiments requiring code.
+378        • Please see the NeurIPS code and data submission guidelines (https://neurips.cc/
+379          public/guides/CodeSubmissionPolicy) for more details.
+380        • While we encourage the release of code and data, we understand that this might not
+381          be possible, so [No] is an acceptable answer. Papers cannot be rejected simply for not
+382          including code, unless this is central to the contribution (e.g., for a new open-source
+383          benchmark).
+384        • The instructions should contain the exact command and environment needed to run to
+385          reproduce the results. See the NeurIPS code and data submission guidelines (https:
+386          //neurips.cc/public/guides/CodeSubmissionPolicy) for more details.
+387        • The authors should provide instructions on data access and preparation, including how
+388          to access the raw data, preprocessed data, intermediate data, and generated data, etc.
+389        • The authors should provide scripts to reproduce all experimental results for the new
+390          proposed method and baselines. If only a subset of experiments are reproducible, they
+391          should state which ones are omitted from the script and why.
+392        • At submission time, to preserve anonymity, the authors should release anonymized
+393          versions (if applicable).
+
+
+                                                 11
+394         • Providing as much information as possible in supplemental material (appended to the
+395            paper) is recommended, but including URLs to data and code is permitted.
+396   6. Experimental setting/details
+397      Question: Does the paper specify all the training and test details (e.g., data splits, hyperpa-
+398      rameters, how they were chosen, type of optimizer) necessary to understand the results?
+399      Answer: [TODO]
+400      Justification: [TODO]
+401      Guidelines:
+402         • The answer [N/A] means that the paper does not include experiments.
+403         • The experimental setting should be presented in the core of the paper to a level of detail
+404            that is necessary to appreciate the results and make sense of them.
+405         • The full details can be provided either with the code, in appendix, or as supplemental
+406            material.
+407   7. Experiment statistical significance
+408      Question: Does the paper report error bars suitably and correctly defined or other appropriate
+409      information about the statistical significance of the experiments?
+410      Answer: [TODO]
+411      Justification: [TODO]
+412      Guidelines:
+413         • The answer [N/A] means that the paper does not include experiments.
+414         • The authors should answer [Yes] if the results are accompanied by error bars, confidence
+415            intervals, or statistical significance tests, at least for the experiments that support the
+416            main claims of the paper.
+417         • The factors of variability that the error bars are capturing should be clearly stated (for
+418            example, train/test split, initialization, random drawing of some parameter, or overall
+419            run with given experimental conditions).
+420         • The method for calculating the error bars should be explained (closed form formula,
+421            call to a library function, bootstrap, etc.)
+422         • The assumptions made should be given (e.g., Normally distributed errors).
+423         • It should be clear whether the error bar is the standard deviation or the standard error
+424            of the mean.
+425         • It is OK to report 1-sigma error bars, but one should state it. The authors should
+426            preferably report a 2-sigma error bar than state that they have a 96% CI, if the hypothesis
+427            of Normality of errors is not verified.
+428         • For asymmetric distributions, the authors should be careful not to show in tables or
+429            figures symmetric error bars that would yield results that are out of range (e.g., negative
+430            error rates).
+431         • If error bars are reported in tables or plots, the authors should explain in the text how
+432            they were calculated and reference the corresponding figures or tables in the text.
+433   8. Experiments compute resources
+434      Question: For each experiment, does the paper provide sufficient information on the com-
+435      puter resources (type of compute workers, memory, time of execution) needed to reproduce
+436      the experiments?
+437      Answer: [TODO]
+438      Justification: [TODO]
+439      Guidelines:
+440         • The answer [N/A] means that the paper does not include experiments.
+441         • The paper should indicate the type of compute workers CPU or GPU, internal cluster,
+442            or cloud provider, including relevant memory and storage.
+443         • The paper should provide the amount of compute required for each of the individual
+444            experimental runs as well as estimate the total compute.
+
+
+                                                   12
+445         • The paper should disclose whether the full research project required more compute
+446           than the experiments reported in the paper (e.g., preliminary or failed experiments that
+447           didn’t make it into the paper).
+448    9. Code of ethics
+449      Question: Does the research conducted in the paper conform, in every respect, with the
+450      NeurIPS Code of Ethics https://neurips.cc/public/EthicsGuidelines?
+451      Answer: [TODO]
+452      Justification: [TODO]
+453      Guidelines:
+454         • The answer [N/A] means that the authors have not reviewed the NeurIPS Code of
+455           Ethics.
+456         • If the authors answer [No], they should explain the special circumstances that require a
+457           deviation from the Code of Ethics.
+458         • The authors should make sure to preserve anonymity (e.g., if there is a special consid-
+459           eration due to laws or regulations in their jurisdiction).
+460   10. Broader impacts
+461      Question: Does the paper discuss both potential positive societal impacts and negative
+462      societal impacts of the work performed?
+463      Answer: [TODO]
+464      Justification: [TODO]
+465      Guidelines:
+466         • The answer [N/A] means that there is no societal impact of the work performed.
+467         • If the authors answer [N/A] or [No], they should explain why their work has no societal
+468           impact or why the paper does not address societal impact.
+469         • Examples of negative societal impacts include potential malicious or unintended uses
+470           (e.g., disinformation, generating fake profiles, surveillance), fairness considerations
+471           (e.g., deployment of technologies that could make decisions that unfairly impact specific
+472           groups), privacy considerations, and security considerations.
+473         • The conference expects that many papers will be foundational research and not tied
+474           to particular applications, let alone deployments. However, if there is a direct path to
+475           any negative applications, the authors should point it out. For example, it is legitimate
+476           to point out that an improvement in the quality of generative models could be used to
+477           generate Deepfakes for disinformation. On the other hand, it is not needed to point out
+478           that a generic algorithm for optimizing neural networks could enable people to train
+479           models that generate Deepfakes faster.
+480         • The authors should consider possible harms that could arise when the technology is
+481           being used as intended and functioning correctly, harms that could arise when the
+482           technology is being used as intended but gives incorrect results, and harms following
+483           from (intentional or unintentional) misuse of the technology.
+484         • If there are negative societal impacts, the authors could also discuss possible mitigation
+485           strategies (e.g., gated release of models, providing defenses in addition to attacks,
+486           mechanisms for monitoring misuse, mechanisms to monitor how a system learns from
+487           feedback over time, improving the efficiency and accessibility of ML).
+488   11. Safeguards
+489      Question: Does the paper describe safeguards that have been put in place for responsible
+490      release of data or models that have a high risk for misuse (e.g., pre-trained language models,
+491      image generators, or scraped datasets)?
+492      Answer: [TODO]
+493      Justification: [TODO]
+494      Guidelines:
+495         • The answer [N/A] means that the paper poses no such risks.
+
+
+                                                  13
+496          • Released models that have a high risk for misuse or dual-use should be released with
+497            necessary safeguards to allow for controlled use of the model, for example by requiring
+498            that users adhere to usage guidelines or restrictions to access the model or implementing
+499            safety filters.
+500          • Datasets that have been scraped from the Internet could pose safety risks. The authors
+501            should describe how they avoided releasing unsafe images.
+502          • We recognize that providing effective safeguards is challenging, and many papers do
+503            not require this, but we encourage authors to take this into account and make a best
+504            faith effort.
+505   12. Licenses for existing assets
+506       Question: Are the creators or original owners of assets (e.g., code, data, models), used in
+507       the paper, properly credited and are the license and terms of use explicitly mentioned and
+508       properly respected?
+509       Answer: [TODO]
+510       Justification: [TODO]
+511       Guidelines:
+512          • The answer [N/A] means that the paper does not use existing assets.
+513          • The authors should cite the original paper that produced the code package or dataset.
+514          • The authors should state which version of the asset is used and, if possible, include a
+515            URL.
+516          • The name of the license (e.g., CC-BY 4.0) should be included for each asset.
+517          • For scraped data from a particular source (e.g., website), the copyright and terms of
+518            service of that source should be provided.
+519          • If assets are released, the license, copyright information, and terms of use in the
+520            package should be provided. For popular datasets, paperswithcode.com/datasets
+521            has curated licenses for some datasets. Their licensing guide can help determine the
+522            license of a dataset.
+523          • For existing datasets that are re-packaged, both the original license and the license of
+524            the derived asset (if it has changed) should be provided.
+525          • If this information is not available online, the authors are encouraged to reach out to
+526            the asset’s creators.
+527   13. New assets
+528       Question: Are new assets introduced in the paper well documented and is the documentation
+529       provided alongside the assets?
+530       Answer: [TODO]
+531       Justification: [TODO]
+532       Guidelines:
+533          • The answer [N/A] means that the paper does not release new assets.
+534          • Researchers should communicate the details of the dataset/code/model as part of their
+535            submissions via structured templates. This includes details about training, license,
+536            limitations, etc.
+537          • The paper should discuss whether and how consent was obtained from people whose
+538            asset is used.
+539          • At submission time, remember to anonymize your assets (if applicable). You can either
+540            create an anonymized URL or include an anonymized zip file.
+541   14. Crowdsourcing and research with human subjects
+542       Question: For crowdsourcing experiments and research with human subjects, does the paper
+543       include the full text of instructions given to participants and screenshots, if applicable, as
+544       well as details about compensation (if any)?
+545       Answer: [TODO]
+546       Justification: [TODO]
+
+
+                                                   14
+547       Guidelines:
+548          • The answer [N/A] means that the paper does not involve crowdsourcing nor research
+549             with human subjects.
+550          • Including this information in the supplemental material is fine, but if the main contribu-
+551             tion of the paper involves human subjects, then as much detail as possible should be
+552             included in the main paper.
+553          • According to the NeurIPS Code of Ethics, workers involved in data collection, curation,
+554             or other labor should be paid at least the minimum wage in the country of the data
+555             collector.
+556   15. Institutional review board (IRB) approvals or equivalent for research with human
+557       subjects
+558       Question: Does the paper describe potential risks incurred by study participants, whether
+559       such risks were disclosed to the subjects, and whether Institutional Review Board (IRB)
+560       approvals (or an equivalent approval/review based on the requirements of your country or
+561       institution) were obtained?
+562       Answer: [TODO]
+563       Justification: [TODO]
+564       Guidelines:
+565          • The answer [N/A] means that the paper does not involve crowdsourcing nor research
+566             with human subjects.
+567          • Depending on the country in which research is conducted, IRB approval (or equivalent)
+568             may be required for any human subjects research. If you obtained IRB approval, you
+569             should clearly state this in the paper.
+570          • We recognize that the procedures for this may vary significantly between institutions
+571             and locations, and we expect authors to adhere to the NeurIPS Code of Ethics and the
+572             guidelines for their institution.
+573          • For initial submissions, do not include any information that would break anonymity (if
+574             applicable), such as the institution conducting the review.
+575   16. Declaration of LLM usage
+576       Question: Does the paper describe the usage of LLMs if it is an important, original, or
+577       non-standard component of the core methods in this research? Note that if the LLM is used
+578       only for writing, editing, or formatting purposes and does not impact the core methodology,
+579       scientific rigor, or originality of the research, declaration is not required.
+580       Answer: [TODO]
+581       Justification: [TODO]
+582       Guidelines:
+583          • The answer [N/A] means that the core method development in this research does not
+584             involve LLMs as any important, original, or non-standard components.
+585          • Please refer to our LLM policy in the NeurIPS handbook for what should or should not
+586             be described.
+
+
+
+
+                                                   15
+

@@ -82,6 +82,7 @@ do
                         --item_correlation ${RHO}\
                         --intra_slate_metric ${INTRA_SLATE_METRIC}\
                         --temper_discount ${TEMPER_DISCOUNT}\
+                        --single_response\
                         --merac_shortlist_size ${MERAC_K}\
                         --merac_policy_hidden 256 64\
                         --merac_tau ${MERAC_TAU}\
